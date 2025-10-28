@@ -21,7 +21,7 @@ The **ML-GWAS** approach implemented here includes:
 - Regression algorithms applied:
   - **Random Forest (RF)**
   - **Extreme Gradient Boosting (XGBoost)**
-  - **Two-Stage Algorithm Based on Least Angle Regression and Random Forest (TSLRF) ** following Sun, J., Wu, Q., Shen, D. et al. TSLRF: Two-Stage Algorithm Based on Least Angle Regression and Random Forest in genome-wide association studies. Sci Rep 9, 18034 (2019). https://doi.org/10.1038/s41598-019-54519-x
+  - **Two-Stage Algorithm Based on Least Angle Regression and Random Forest (TSLRF)** following Sun, J., Wu, Q., Shen, D. et al. TSLRF: Two-Stage Algorithm Based on Least Angle Regression and Random Forest in genome-wide association studies. Sci Rep 9, 18034 (2019). https://doi.org/10.1038/s41598-019-54519-x
   - **Elastic Net (EN)**
 - **Stability selection** used to identify robust SNP features for EN following Meinshausen, N., & Bühlmann, P. (2010). Stability selection. Journal of the Royal Statistical Society Series B: Statistical Methodology, Volume 72, Issue 4, September 2010, Pages 417–473, https://doi.org/10.1111/j.1467-9868.2010.00740.x
 
