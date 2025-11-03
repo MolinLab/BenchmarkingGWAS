@@ -611,70 +611,131 @@ learner_rf$param_set$values <- c(best_tune_result$x_domain[[1]], list(importance
 # Variable Importance (Average over Multiple Runs)
 # ============================================================
 
-# Number of runs to average over
-n_runs <-100
+n_reps <- 100                # how many repeated 5-fold CV runs
+n_workers_reps <- 10             # how many parallel workers for the 100 reps 
 
-# Create an empty list to store importance matrices from each run
-importance_list <- vector("list", n_runs)
-
-# Get feature names 
 feature_names <- task_gwas_rf$feature_names
+n_features <- length(feature_names)
 
-for (i in seq_len(n_runs)) {
-  # Train the model on the task
-  learner_rf$train(task_gwas_rf)
+run_one_rep <- function(rep_idx) {
+  cat("Starting repetition", rep_idx, "\n")
+  set.seed(1000 + rep_idx)
   
-  # Extract importance
+  learner_clone <- learner_rf$clone(deep = TRUE)
+  resampling_clone <- outer_rs$clone(deep = TRUE)
   
-  importance_scores = learner_rf$model$variable.importance
+  rr_local <- resample(
+    task = task_gwas_rf,
+    learner = learner_clone,
+    resampling = resampling_clone,
+    store_models = TRUE
+  )
   
-  # Convert to a data.frame 
-  importance_df = data.frame(Feature = names(importance_scores),
-                             Importance = as.vector(importance_scores))
+  per_fold_importances <- matrix(
+    0, nrow = n_features, ncol = length(rr_local$learners),
+    dimnames = list(feature_names, paste0("fold", seq_along(rr_local$learners)))
+  )
   
+  for (i in seq_along(rr_local$learners)) {
+    learner_i <- rr_local$learners[[i]]
+    imp_vec <- learner_i$importance()
+    
+    tmp <- numeric(n_features)
+    names(tmp) <- feature_names
+    
+    if (!is.null(imp_vec) && length(imp_vec) > 0)
+      tmp[names(imp_vec)] <- as.numeric(imp_vec)
+    
+    per_fold_importances[, i] <- tmp
+  }
   
-  # Store the importance matrix
-  importance_list[[i]] <- as.data.frame(importance_df)
+  mean_imp_rep <- rowMeans(per_fold_importances, na.rm = TRUE)
+  cat("Finished repetition", rep_idx, "\n")
   
-  cat("Run", i, "completed\n")
+  return(list(mean_importance = mean_imp_rep))
 }
-# average feature importances
-avg_importance <- bind_rows(importance_list) %>%
-  group_by(Feature) %>%
-  summarize(Importance = mean(Importance, na.rm = TRUE)) %>%
-  ungroup() %>%
-  rename(SNP = Feature) %>%
-  arrange(desc(Importance))
+
+plan(multisession, workers = n_workers_reps)  # parallel across reps
+rep_results <- future_lapply(seq_len(n_reps), function(r) {
+  run_one_rep(r)
+}, future.seed = TRUE)
+plan(sequential)
+
+imp_all_runs <- sapply(rep_results, function(res) res$mean_importance)
+
+
+imp_mean <- rowMeans(imp_all_runs, na.rm = TRUE)
+
+imp_summary <- data.table(
+  marker = feature_names,
+  mean_importance = imp_mean)
+                       [order(-mean_importance)]
 
 # ============================================================
 # Permutation Test for Empirical Threshold
 # ============================================================
-n_perm <- 1000
-perm_max_importances <- numeric(n_perm)
-learner_rf_perm <- learner_rf$clone(deep = TRUE)
+B <- 1000 #number permutations
+n_workers <- 10
 
-for (i in seq_len(n_perm)) {
-  # Extract data from the original task and create a new data.table
-  data_perm <- as.data.table(task_gwas_rf$data())
-  
-  # Permute the target variable 
-  data_perm[, y := sample(y)]
-  #data_perm[, PH := sample(PH)]
-  # Create a new task with the permuted data
-  task_perm <- TaskRegr$new(id = paste0("gwas_rf_perm_", i), backend = data_perm, target = "y")
-  #task_perm <- TaskRegr$new(id = paste0("gwas_rf_perm_", i), backend = data_perm, target = "PH")
-  # Train the model on the permuted task
-  learner_rf_perm$train(task_perm)
-  
-  # Record the maximum variable importance from this permutation
-  perm_max_importances[i] <- max(learner_rf_perm$model$variable.importance, na.rm = TRUE)
-  print(i)
+compute_mean_imp_from_rr <- function(rr_local, feature_names) {
+  n_iter_local <- length(rr_local$learners)
+  imp_mat_local <- matrix(0, nrow = length(feature_names), ncol = n_iter_local,
+                          dimnames = list(feature_names, paste0("iter", seq_len(n_iter_local))))
+  for (i in seq_len(n_iter_local)) {
+    imp_vec <- rr_local$learners[[i]]$importance()
+    if (!is.null(imp_vec) && length(imp_vec) > 0) {
+      tmp <- numeric(length(feature_names))
+      names(tmp) <- feature_names
+      tmp[names(imp_vec)] <- as.numeric(imp_vec)
+      imp_mat_local[, i] <- tmp
+    }
+  }
+  rowMeans(imp_mat_local, na.rm = TRUE)
 }
 
-# Calculate the empirical threshold based on the 95th percentile of the maximum importances
-emp_threshold_perm <- quantile(perm_max_importances, probs = 0.95)
-cat("Empirical 95th percentile threshold from permutation test (max importances):", 
-    emp_threshold_perm, "\n")
+run_one_perm <- function(seed = NULL, resampling_clone) {
+  if (!is.null(seed)) set.seed(seed)
+  
+  data_perm <- as.data.table(task_gwas_rf$data())
+  target_name <- task_gwas_rf$target_names
+  data_perm[[target_name]] <- sample(data_perm[[target_name]])
+  
+  task_perm <- TaskRegr$new(
+    id = paste0("perm_task_", sample.int(1e8, 1)),
+    backend = data_perm,
+    target = target_name
+  )
+  
+  learner_clone <- learner_rf$clone(deep = TRUE)
+  rr_perm <- resample(
+    task = task_perm,
+    learner = learner_clone,
+    resampling = resampling_clone,
+    store_models = TRUE
+  )
+  
+  mean_imp_perm <- compute_mean_imp_from_rr(rr_perm, feature_names)
+  max(mean_imp_perm, na.rm = TRUE)
+}
+
+set.seed(123)
+seeds <- sample.int(.Machine$integer.max, B)
+resampling_clone <- outer_rs$clone(deep = TRUE)
+
+cat("Starting permutation threshold with", B, "permutations on", n_workers, "workers\n")
+
+future::plan("multisession", workers = n_workers)
+with_progress({
+  perm_max_imp <- future_lapply(seq_len(B), function(b) {
+    run_one_perm(seed = seeds[b], resampling_clone = resampling_clone)
+  }, future.seed = TRUE)
+})
+future::plan("sequential")
+
+perm_max_imp <- vapply(perm_max_imp, as.numeric, numeric(1))
+emp_threshold_perm <- as.numeric(quantile(perm_max_imp, probs = alpha, na.rm = TRUE))
+
+cat(sprintf("permutation threshold (%.1f%% percentile): %g\n",0.95, emp_threshold_perm))
 
 
 
@@ -684,5 +745,5 @@ cat("Empirical 95th percentile threshold from permutation test (max importances)
 #save.image("TSLRF_PH_mlr3.RData")
 myGM<-read.csv("myGM_TKW.csv")
 avg_importance2<-merge(avg_importance,myGM, by="SNP")
-write.csv(avg_importance2, file = "TSLRF_avg_importance_TKW.csv",row.names = F)
+write.csv(imp_summary, file = "TSLRF_avg_importance_TKW.csv",row.names = F)
 write.table(emp_threshold_perm, "emp_threshold_TKW_TSLRF_.txt")
