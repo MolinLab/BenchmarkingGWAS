@@ -104,7 +104,7 @@ learner_rf$param_set$values <- c(best_hyperpars[[1]], list(importance = "impurit
 n_reps <- 100                # how many repeated 5-fold CV runs
 n_workers_reps <- 10             # how many parallel workers for the 100 reps 
 
-feature_names <- GY_genotype_task$feature_names
+feature_names <- task_gwas_rf$feature_names
 n_features <- length(feature_names)
 
 run_one_rep <- function(rep_idx) {
@@ -115,7 +115,7 @@ run_one_rep <- function(rep_idx) {
   resampling_clone <- outer_rs$clone(deep = TRUE)
   
   rr_local <- resample(
-    task = GY_genotype_task,
+    task = task_gwas_rf,
     learner = learner_clone,
     resampling = resampling_clone,
     store_models = TRUE
@@ -169,7 +169,7 @@ imp_summary <- data.table(
 B <- 1000 #number permutations
 n_workers <- 10
 
-compute_mean_gain_from_rr <- function(rr_local, feature_names) {
+compute_mean_imp_from_rr <- function(rr_local, feature_names) {
   n_iter_local <- length(rr_local$learners)
   imp_mat_local <- matrix(0, nrow = length(feature_names), ncol = n_iter_local,
                           dimnames = list(feature_names, paste0("iter", seq_len(n_iter_local))))
@@ -185,11 +185,11 @@ compute_mean_gain_from_rr <- function(rr_local, feature_names) {
   rowMeans(imp_mat_local, na.rm = TRUE)
 }
 
-run_one_rigorous_perm <- function(seed = NULL, resampling_clone) {
+run_one_perm <- function(seed = NULL, resampling_clone) {
   if (!is.null(seed)) set.seed(seed)
   
-  data_perm <- as.data.table(GY_genotype_task$data())
-  target_name <- GY_genotype_task$target_names
+  data_perm <- as.data.table(task_gwas_rf$data())
+  target_name <- task_gwas_rf$target_names
   data_perm[[target_name]] <- sample(data_perm[[target_name]])
   
   task_perm <- TaskRegr$new(
@@ -206,28 +206,28 @@ run_one_rigorous_perm <- function(seed = NULL, resampling_clone) {
     store_models = TRUE
   )
   
-  mean_gain_perm <- compute_mean_gain_from_rr(rr_perm, feature_names)
-  max(mean_gain_perm, na.rm = TRUE)
+  mean_imp_perm <- compute_mean_imp_from_rr(rr_perm, feature_names)
+  max(mean_imp_perm, na.rm = TRUE)
 }
 
 set.seed(123)
 seeds <- sample.int(.Machine$integer.max, B)
 resampling_clone <- outer_rs$clone(deep = TRUE)
 
-cat("Starting rigorous permutation threshold with", B, "permutations on", n_workers, "workers\n")
+cat("Starting permutation threshold with", B, "permutations on", n_workers, "workers\n")
 
 future::plan("multisession", workers = n_workers)
 with_progress({
-  perm_max_gain <- future_lapply(seq_len(B), function(b) {
-    run_one_rigorous_perm(seed = seeds[b], resampling_clone = resampling_clone)
+  perm_max_imp <- future_lapply(seq_len(B), function(b) {
+    run_one_perm(seed = seeds[b], resampling_clone = resampling_clone)
   }, future.seed = TRUE)
 })
 future::plan("sequential")
 
-perm_max_gain <- vapply(perm_max_gain, as.numeric, numeric(1))
-gain_threshold <- as.numeric(quantile(perm_max_gain, probs = alpha, na.rm = TRUE))
+perm_max_imp <- vapply(perm_max_imp, as.numeric, numeric(1))
+imp_threshold <- as.numeric(quantile(perm_max_imp, probs = alpha, na.rm = TRUE))
 
-cat(sprintf("Rigorous permutation threshold (%.1f%% percentile): %g\n",0.95, gain_threshold))
+cat(sprintf("permutation threshold (%.1f%% percentile): %g\n",0.95, imp_threshold))
 
 
 # ============================================================
@@ -240,4 +240,4 @@ cat(sprintf("Rigorous permutation threshold (%.1f%% percentile): %g\n",0.95, gai
 # myGM <- read.csv("../../../imputation_test/new_data/myGM_PH.csv")
 # importance_df2 <- merge(imp_summary, myGM, by = "SNP")
 # write.table(importance_df2, "importance_RF_PH.txt", row.names = FALSE)
-# write.table(gain_threshold, "emp_threshold_RF_PH.txt", row.names = FALSE)
+# write.table(imp_threshold, "emp_threshold_RF_PH.txt", row.names = FALSE)
