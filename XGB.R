@@ -103,6 +103,71 @@ learner_xgb$param_set$values <- c(best_hyperpars[[1]], list(nrounds = 1000))
 n_reps <- 100                # how many repeated 5-fold CV runs
 n_workers_reps <- 10              # how many parallel workers for the 100 reps (adjust to your resources)
 
+feature_names <- task_gwas_xgb$feature_names
+importance_list <- vector("list", n_runs)
+
+for (i in seq_len(n_reps)) {
+  learner_xgb$train(task_gwas_xgb)
+  imp_matrix <- xgb.importance(feature_names = feature_names, model = learner_xgb$model)
+  importance_list[[i]] <- as.data.frame(imp_matrix)
+  cat("Run", i, "completed\n")
+}
+
+# Average importance scores
+imp_summary <- bind_rows(importance_list) %>%
+  group_by(Feature) %>%
+  summarize(
+    Gain = mean(Gain, na.rm = TRUE),
+    Cover = mean(Cover, na.rm = TRUE),
+    Frequency = mean(Frequency, na.rm = TRUE)
+  ) %>%
+  ungroup() %>%
+  rename(SNP = Feature)
+
+
+
+# ============================================================
+# 4. Permutation Test for Empirical Threshold
+# ============================================================
+n_perm <- 1000
+perm_max_importances <- numeric(n_perm)
+feature_names <- setdiff(task_gwas_xgb$feature_names, task_gwas_xgb$target_names)
+learner_xgb_perm <- learner_xgb$clone(deep = TRUE)
+
+for (i in seq_len(n_perm)) {
+  data_perm <- as.data.table(task_gwas_xgb$data())
+  data_perm[, TKW := sample(TKW)]  # change to PH if target is PH
+  
+  task_perm <- TaskRegr$new(
+    id = paste0("gwas_rf_perm_", i),
+    backend = data_perm,
+    target = "TKW" # change to PH if needed
+  )
+  
+  learner_xgb_perm$train(task_perm)
+  imp_perm <- xgb.importance(feature_names = feature_names, model = learner_xgb_perm$model)
+  perm_max_importances[i] <- max(imp_perm$Gain)
+  cat("Permutation", i, "completed\n")
+}
+
+# 95th percentile empirical threshold
+emp_threshold_perm <- quantile(perm_max_importances, probs = 0.95)
+cat("Empirical 95th percentile threshold:", emp_threshold_perm, "\n")
+# ============================================================
+# 5. Merge with Marker Metadata and Save Results
+# ============================================================
+
+#yGM <- read.csv("myGM.csv")
+
+#importance_df2 <- merge(imp_summary, myGM, by = "SNP")
+#write.table(importance_df2, "importance_xgboost_PH.txt", row.names = FALSE)
+#write.table(emp_threshold_perm, "emp_threshold_xgboost_TKW.txt", row.names = FALSE)
+
+# Optional: save workspace
+# save.image("mlr3_xgboost_PH.RData")
+# ============================================================
+# Importance from folds averaged over all folds (a different way as used in the study, it is less biased but takes significantly longer) 
+# ============================================================
 feature_names <- GY_genotype_task$feature_names
 n_features <- length(feature_names)
 
@@ -160,10 +225,6 @@ imp_summary <- data.table(
   mean_importance = imp_mean
   )[order(-mean_importance)]
 
-
-# ============================================================
-# 4. Permutation Test for Empirical Threshold
-# ============================================================
 B <- 1000 #number permutations
 n_workers <- 10
 
@@ -196,7 +257,7 @@ run_one_perm <- function(seed = NULL, resampling_clone) {
     target = target_name
   )
   
-  learner_clone <- learner_rf$clone(deep = TRUE)
+  learner_clone <- learner_xgb$clone(deep = TRUE)
   rr_perm <- resample(
     task = task_perm,
     learner = learner_clone,
@@ -225,16 +286,4 @@ future::plan("sequential")
 perm_max_imp <- vapply(perm_max_imp, as.numeric, numeric(1))
 emp_threshold_perm <- as.numeric(quantile(perm_max_imp, probs = alpha, na.rm = TRUE))
 
-cat(sprintf("permutation threshold (%.1f%% percentile): %g\n",0.95, emp_threshold_perm))
-# ============================================================
-# 5. Merge with Marker Metadata and Save Results
-# ============================================================
-
-#yGM <- read.csv("myGM.csv")
-
-#importance_df2 <- merge(imp_summary, myGM, by = "SNP")
-#write.table(importance_df2, "importance_xgboost_PH.txt", row.names = FALSE)
-#write.table(emp_threshold_perm, "emp_threshold_xgboost_TKW.txt", row.names = FALSE)
-
-# Optional: save workspace
-# save.image("mlr3_xgboost_PH.RData")
+cat(sprintf("permutation threshold (%.1f%% percentile): %g\n",0.95, emp_threshold_perm))                       
