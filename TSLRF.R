@@ -614,6 +614,80 @@ learner_rf$param_set$values <- c(best_tune_result$x_domain[[1]], list(importance
 n_reps <- 100                # how many repeated 5-fold CV runs
 n_workers_reps <- 10             # how many parallel workers for the 100 reps 
 
+# Create an empty list to store importance matrices from each run
+importance_list <- vector("list", n_runs)
+
+# Get feature names 
+feature_names <- task_gwas_rf$feature_names
+
+for (i in seq_len(n_runs)) {
+  # Train the model on the task
+  learner_rf$train(task_gwas_rf)
+  
+  # Extract importance
+  
+  importance_scores = learner_rf$model$variable.importance
+  
+  # Convert to a data.frame 
+  importance_df = data.frame(Feature = names(importance_scores),
+                             Importance = as.vector(importance_scores))
+  
+  
+  # Store the importance matrix
+  importance_list[[i]] <- as.data.frame(importance_df)
+  
+  cat("Run", i, "completed\n")
+}
+# average feature importances
+avg_importance <- bind_rows(importance_list) %>%
+  group_by(Feature) %>%
+  summarize(Importance = mean(Importance, na.rm = TRUE)) %>%
+  ungroup() %>%
+  rename(SNP = Feature) %>%
+  arrange(desc(Importance))
+
+# ============================================================
+# Permutation Test for Empirical Threshold
+# ============================================================
+n_perm <- 1000
+perm_max_importances <- numeric(n_perm)
+learner_rf_perm <- learner_rf$clone(deep = TRUE)
+
+for (i in seq_len(n_perm)) {
+  # Extract data from the original task and create a new data.table
+  data_perm <- as.data.table(task_gwas_rf$data())
+  
+  # Permute the target variable 
+  data_perm[, y := sample(y)]
+  #data_perm[, PH := sample(PH)]
+  # Create a new task with the permuted data
+  task_perm <- TaskRegr$new(id = paste0("gwas_rf_perm_", i), backend = data_perm, target = "y")
+  #task_perm <- TaskRegr$new(id = paste0("gwas_rf_perm_", i), backend = data_perm, target = "PH")
+  # Train the model on the permuted task
+  learner_rf_perm$train(task_perm)
+  
+  # Record the maximum variable importance from this permutation
+  perm_max_importances[i] <- max(learner_rf_perm$model$variable.importance, na.rm = TRUE)
+  print(i)
+}
+
+# Calculate the empirical threshold based on the 95th percentile of the maximum importances
+emp_threshold_perm <- quantile(perm_max_importances, probs = 0.95)
+cat("Empirical 95th percentile threshold from permutation test (max importances):", 
+    emp_threshold_perm, "\n")
+
+# ============================================================
+# Merge with Marker Metadata and Save Results
+# ============================================================
+#save.image("TSLRF_PH_mlr3.RData")
+myGM<-read.csv("myGM_TKW.csv")
+avg_importance2<-merge(avg_importance,myGM, by="SNP")
+write.csv(imp_summary, file = "TSLRF_avg_importance_TKW.csv",row.names = F)
+write.table(emp_threshold_perm, "emp_threshold_TKW_TSLRF_.txt")
+
+# ============================================================
+# average importance across folds 
+# ============================================================                       
 feature_names <- task_gwas_rf$feature_names
 n_features <- length(feature_names)
 
@@ -671,9 +745,7 @@ imp_summary <- data.table(
   mean_importance = imp_mean)
                        [order(-mean_importance)]
 
-# ============================================================
-# Permutation Test for Empirical Threshold
-# ============================================================
+
 B <- 1000 #number permutations
 n_workers <- 10
 
@@ -737,13 +809,3 @@ emp_threshold_perm <- as.numeric(quantile(perm_max_imp, probs = alpha, na.rm = T
 
 cat(sprintf("permutation threshold (%.1f%% percentile): %g\n",0.95, emp_threshold_perm))
 
-
-
-# ============================================================
-# Merge with Marker Metadata and Save Results
-# ============================================================
-#save.image("TSLRF_PH_mlr3.RData")
-myGM<-read.csv("myGM_TKW.csv")
-avg_importance2<-merge(avg_importance,myGM, by="SNP")
-write.csv(imp_summary, file = "TSLRF_avg_importance_TKW.csv",row.names = F)
-write.table(emp_threshold_perm, "emp_threshold_TKW_TSLRF_.txt")
