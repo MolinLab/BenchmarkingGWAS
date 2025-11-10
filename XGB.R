@@ -99,10 +99,7 @@ learner_xgb$param_set$values <- c(best_hyperpars[[1]], list(nrounds = 1000))
 # ============================================================
 # 3. Variable Importance (Average over Multiple Runs)
 # ============================================================
-
-n_reps <- 100                # how many repeated 5-fold CV runs
-n_workers_reps <- 10              # how many parallel workers for the 100 reps (adjust to your resources)
-
+n_runs <- 100
 feature_names <- task_gwas_xgb$feature_names
 importance_list <- vector("list", n_runs)
 
@@ -168,6 +165,10 @@ cat("Empirical 95th percentile threshold:", emp_threshold_perm, "\n")
 # ============================================================
 # Importance from folds averaged over all folds (a different way as used in the study, it is less biased but takes significantly longer) 
 # ============================================================
+n_reps <- 100                # how many repeated 5-fold CV runs
+n_workers_reps <- 10              # how many parallel workers for the 100 reps (adjust to your resources)
+
+
 feature_names <- GY_genotype_task$feature_names
 n_features <- length(feature_names)
 
