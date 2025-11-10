@@ -610,10 +610,7 @@ learner_rf$param_set$values <- c(best_tune_result$x_domain[[1]], list(importance
 # ============================================================
 # Variable Importance (Average over Multiple Runs)
 # ============================================================
-
-n_reps <- 100                # how many repeated 5-fold CV runs
-n_workers_reps <- 10             # how many parallel workers for the 100 reps 
-
+n_runs <- 100
 # Create an empty list to store importance matrices from each run
 importance_list <- vector("list", n_runs)
 
@@ -688,6 +685,10 @@ write.table(emp_threshold_perm, "emp_threshold_TKW_TSLRF_.txt")
 # ============================================================
 # average importance across folds 
 # ============================================================                       
+
+n_reps <- 100                # how many repeated 5-fold CV runs
+n_workers_reps <- 10             # how many parallel workers for the 100 reps 
+
 feature_names <- task_gwas_rf$feature_names
 n_features <- length(feature_names)
 
