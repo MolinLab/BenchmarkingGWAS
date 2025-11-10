@@ -101,6 +101,81 @@ learner_rf$param_set$values <- c(best_hyperpars[[1]], list(importance = "impurit
 # 3. Variable Importance (Average over Multiple Runs)
 # ============================================================
 
+n_runs <- 100
+feature_names <- task_gwas_rf$feature_names
+importance_list <- vector("list", n_runs)
+
+for (i in seq_len(n_runs)) {
+  learner_rf$train(task_gwas_rf)
+  
+  importance_scores <- learner_rf$model$variable.importance
+  importance_df <- data.frame(
+    Feature = names(importance_scores),
+    Importance = as.vector(importance_scores)
+  )
+  
+  importance_list[[i]] <- importance_df
+  cat("Run", i, "completed\n")
+}
+
+# Average importance scores
+avg_importance <- bind_rows(importance_list) %>%
+  group_by(Feature) %>%
+  summarize(Importance = mean(Importance, na.rm = TRUE)) %>%
+  ungroup() %>%
+  rename(SNP = Feature)
+# ============================================================
+# 4. Permutation Test for Empirical Threshold
+# ============================================================
+
+n_perm <- 1000
+perm_max_importances <- numeric(n_perm)
+learner_rf_perm <- learner_rf$clone(deep = TRUE)
+
+for (i in seq_len(n_perm)) {
+  data_perm <- as.data.table(task_gwas_rf$data())
+  
+  # Permute the target variable
+  data_perm[, TKW := sample(TKW)]  # change to PH 
+  
+  # Create new permuted task
+  task_perm <- TaskRegr$new(
+    id = paste0("gwas_rf_perm_", i),
+    backend = data_perm,
+    target = "TKW" # change to PH 
+  )
+  
+  learner_rf_perm$train(task_perm)
+  
+  perm_max_importances[i] <- max(learner_rf_perm$model$variable.importance, na.rm = TRUE)
+  cat("Permutation", i, "completed\n")
+}
+
+# 95th percentile empirical threshold
+emp_threshold_perm <- quantile(perm_max_importances, probs = 0.95)
+cat("Empirical 95th percentile threshold (max importances):", emp_threshold_perm, "\n")
+
+# Identify significant features
+significant_features <- avg_importance$SNP[avg_importance$Importance > emp_threshold_perm]
+cat("Number of features exceeding the empirical threshold:", length(significant_features), "\n")
+
+
+
+# ============================================================
+# 5. Save Results
+# ============================================================
+
+#save.image("mlr3_RF_TKW.RData")
+
+# Optionally merge with marker metadata
+# myGM <- read.csv("../../../imputation_test/new_data/myGM_PH.csv")
+# importance_df2 <- merge(imp_summary, myGM, by = "SNP")
+# write.table(importance_df2, "importance_RF_PH.txt", row.names = FALSE)
+# write.table(imp_threshold, "emp_threshold_RF_PH.txt", row.names = FALSE)
+
+ # ============================================================
+# average importance across folds
+# ============================================================
 n_reps <- 100                # how many repeated 5-fold CV runs
 n_workers_reps <- 10             # how many parallel workers for the 100 reps 
 
@@ -162,9 +237,7 @@ imp_summary <- data.table(
                        [order(-mean_importance)]
 
 
-# ============================================================
-# 4. Permutation Test for Empirical Threshold
-# ============================================================
+
 
 B <- 1000 #number permutations
 n_workers <- 10
@@ -228,16 +301,3 @@ perm_max_imp <- vapply(perm_max_imp, as.numeric, numeric(1))
 imp_threshold <- as.numeric(quantile(perm_max_imp, probs = alpha, na.rm = TRUE))
 
 cat(sprintf("permutation threshold (%.1f%% percentile): %g\n",0.95, imp_threshold))
-
-
-# ============================================================
-# 5. Save Results
-# ============================================================
-
-#save.image("mlr3_RF_TKW.RData")
-
-# Optionally merge with marker metadata
-# myGM <- read.csv("../../../imputation_test/new_data/myGM_PH.csv")
-# importance_df2 <- merge(imp_summary, myGM, by = "SNP")
-# write.table(importance_df2, "importance_RF_PH.txt", row.names = FALSE)
-# write.table(imp_threshold, "emp_threshold_RF_PH.txt", row.names = FALSE)
